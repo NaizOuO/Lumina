@@ -67,6 +67,7 @@ DEFAULT_SETTINGS = {
     "bg_x": 50, "bg_y": 50,       # 置中、自由模式的位置（%）
     "bg_scale": 100,              # 自由模式的縮放（%）
     # 一般
+    "auto_approve": False,        # 自動模式：模型要執行指令、使用 MCP 工具時不再詢問，直接執行（使用者自負風險）
     "chime": True,                # 需要使用者確認（授權卡、下載元件）時響提示音
     "send_key": "enter",          # enter：Enter 送出／ctrl_enter：Ctrl+Enter 送出、Enter 換行
     "default_model": "",          # 新對話的預設模型；空字串 = 沿用上次用的
@@ -611,6 +612,8 @@ def _decide_tool(payload):
                             "如果真的需要執行程式，請告訴使用者：切到左上角的「Code」區、加入工作資料夾後就可以。", "對話模式")
     if not run:
         return done("deny", "背景工作不能執行指令。", "背景工作")
+    if load_settings().get("auto_approve"):      # 使用者在設定開了自動模式：不再詢問，全部直接執行（有風險的也是）
+        return done("auto_approve", note="自動模式")
     network = any("網路" in w for w in a["warnings"])
     if a["level"] == "ask" and a["key"] and a["key"] in load_perms()["always"]:
         return done("auto_approve", note=f"永遠允許：{a['key']}")
@@ -1199,7 +1202,8 @@ SEARCH_HINT = "\n\n[請先用 search_web 上網搜尋最新資料再回答，並
 LOCAL_PREFIX = "local:"
 
 
-VOICE = {"proc": None, "port": None}
+VOICE = {"proc": None, "port": None, "used": 0.0}
+VOICE_IDLE = 120                 # 閒置這麼久就關掉辨識程式，把顯示卡記憶體還給其他程式（例如本地模型）
 VOICE_LOCK = threading.Lock()
 VOICE_PROMPT = "以下是繁體中文的句子，可能夾雜英文。"
 
@@ -1249,6 +1253,7 @@ def transcribe(pcm16):
     import wave
     with VOICE_LOCK:
         port = voice_server()
+        VOICE["used"] = time.time()
         buf = io.BytesIO()
         with wave.open(buf, "wb") as w:
             w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000); w.writeframes(pcm16[-30 * 32000:])
@@ -1284,10 +1289,24 @@ def to_traditional(text):
     return OPENCC["cc"].convert(text) if OPENCC["cc"] else text
 
 
+def voice_reaper():
+    while True:
+        time.sleep(15)
+        with VOICE_LOCK:
+            p = VOICE["proc"]
+            if p is not None and p.poll() is None and time.time() - VOICE["used"] > VOICE_IDLE:
+                p.kill()
+                VOICE["proc"] = None
+
+
+threading.Thread(target=voice_reaper, daemon=True).start()
+
+
 def warm_voice():
     try:
         with VOICE_LOCK:
             voice_server()
+            VOICE["used"] = time.time()
     except Exception:
         pass                           # 真的要辨識時會再試一次，錯誤在那時候回報
 

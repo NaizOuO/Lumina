@@ -129,6 +129,64 @@ python dev/delegate.py "<工作資料夾>" --task "要做什麼" [--task-file �
 
 派工前先查額度；剩不到 20% 時告訴使用者，不要硬跑到被鎖。
 
+## 給 AI 協作：Claude（桌面版對話）把長影片、大檔案交給 Lumina
+
+> **給 AI 模型**：你是 Claude 桌面版 Chat 分頁裡的 Claude，而且看得到 `lumina_ask` 工具時讀這一節。
+
+### 什麼時候交給 Lumina
+
+Lumina 是使用者電腦上的 Gemini，用 Antigravity 的額度（跟你的額度分開）。Gemini 可以**直接看影片、聽聲音**，不用先拆成圖片和逐字稿。
+
+| 交給 Lumina | 自己做 |
+|---|---|
+| 很長的影片、錄音（例如超過幾分鐘的課程、會議、遊戲實況） | 很短的片段、使用者只問一個小細節 |
+| 很大的 PDF、一次很多檔案，需要先讀完再摘要 | 需要你自己判斷、整理、跟使用者討論的部分 |
+| 使用者說「交給 Lumina」「讓 Gemini 看」 | |
+
+**不要**用 Naiz Studio 的 `video-look` 看長影片：拆出來的畫面和逐字稿會全部進到你的對話裡，很吃上下文和額度。長影片一律交給 Lumina。
+
+### 怎麼用
+
+1. `lumina_ask`：交出工作，馬上回傳 `job_id`。
+   - `prompt`：寫清楚要什麼，越具體越好。例如「列出每個段落的主題和開始時間」「找出講者提到 X 的所有時間點，附原話」，不要只寫「看一下這個影片」。
+   - `files`：本機檔案的**完整路徑**（影片、音訊、圖片、PDF、文字檔都可以）。
+   - `conversation_id`：追問同一份內容時帶上（`lumina_result` 會給），Lumina 記得看過的東西，不用重看，又快又省。
+   - `model`：預設 `gemini-3.8-flash-high`，通常不用改；`lumina_models` 可以列出能用的模型。
+2. `lumina_result`：拿結果。還沒好會回報進度（每次最多等約 50 秒），再呼叫一次就好。長影片可能要好幾分鐘，等的時候可以先跟使用者說正在處理。
+3. 拿到結果後，由你整理、判斷、回答使用者。Lumina 的回答會附時間點，有疑問就用 `conversation_id` 追問，不要自己猜影片內容。
+
+### 檔案超過 100 MB、要執行指令、要存檔：Code 模式
+
+Lumina（agy）**一個檔案最多讀 100 MB**，這是 Google 那邊的限制，調不了。很長的影片通常超過，這時 `lumina_ask` 帶 `work_dir`（一個資料夾的完整路徑，通常就是影片所在的資料夾）：
+
+- Lumina 會在那個資料夾工作，可以執行指令（例如用 ffmpeg 把影片切成 100 MB 以內的段落、依換頁抽投影片影格）、讀寫檔案、用其他 MCP 工具，再看處理後的結果。
+- prompt 裡寫清楚怎麼處理，例如「影片太大，先用 ffmpeg 切成每段 10 分鐘、720p，再逐段看」，以及結果要存到哪裡。
+- **授權**：使用者在 Lumina「設定 → 一般」開了「自動模式」就不會詢問。沒開時，`lumina_result` 會回「等待授權：Lumina 想執行 …」，這時**先問使用者**，再用 `lumina_approve` 回答 `allow`（這一次）、`allow_all`（這段工作同一個程式都允許）或 `deny`。不要自己替使用者決定。
+- 沒有 `work_dir` 時是唯讀的一般模式：不能執行指令，需要授權的操作會被自動拒絕。
+
+**誠實要求**：要求看畫面時，在 prompt 裡要求 Lumina 每一項標出來源（【畫面】或【字幕】），而且「看不到畫面就停下來回報，不要用字幕推測」。曾經發生過影片讀不到、模型只讀字幕卻寫出「逐頁整理」的情況。
+
+### 注意
+
+- Lumina 要開著（http://127.0.0.1:8765）。連不到時工具會說，請使用者打開 Lumina（雙擊「啟動.vbs」或桌面捷徑）。
+- 沒給 `work_dir` 時 Lumina 只能讀檔、上網查資料，**不能執行指令或改檔案**；需要授權的操作會自動拒絕。
+- 交出去的對話會出現在 Lumina 的對話清單，使用者可以在 Lumina 裡看到完整過程。
+- 實測：7 秒的影片約 45 秒拿到結果（含畫面和說話內容、附時間點）；追問約 12 秒。
+
+### 安裝（使用者或開發者做一次）
+
+在 Claude 桌面版的 `claude_desktop_config.json` 的 `mcpServers` 加入（路徑換成自己的），再重開 Claude 桌面版：
+
+```json
+"lumina": {
+  "command": "C:\\...\\python.exe",
+  "args": ["C:\\...\\Lumina\\tools\\claude_bridge_mcp.py"],
+  "env": {"PYTHONUTF8": "1"}
+}
+```
+
+設定檔位置：Microsoft Store 版在 `%LOCALAPPDATA%\Claude-Data\claude_<一串字>\claude_desktop_config.json`；一般安裝版在 `%APPDATA%\Claude\claude_desktop_config.json`。
+
 ## 發布新版（開發者）
 ```
 python release.py 1.1.0 "更新內容第一行" "第二行"

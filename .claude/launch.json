@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "simple-game",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "http.server", "8765", "--directory", "C:\\Users\\User\\Desktop\\lumina code test\\3D-claude-only"],
+      "port": 8765
+    }
+  ]
+}

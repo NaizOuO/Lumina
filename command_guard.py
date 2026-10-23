@@ -203,9 +203,13 @@ def assess(tool, args, roots):
         if re.search(pat, norm):
             bump("block", why)
     # 指令裡出現的絕對路徑都要在允許的資料夾裡（讀取其他地方的檔案也可能外洩）
-    for m in re.finditer(r"[a-z]:[\\/][^\s\"'|&;<>]*", raw, re.I):
-        if not _inside(m.group(0), roots):
-            bump("strict", f"用到工作資料夾以外的路徑：{m.group(0)}", warn=True)
+    # 引號裡的路徑可能有空格（例如 "C:\...\lumina code test\..."）：先整段認出來，再看引號外面的
+    quoted = re.compile(r"\"([a-z]:[\\/][^\"]*)\"|'([a-z]:[\\/][^']*)'", re.I)
+    paths = [a or b for a, b in quoted.findall(raw)]
+    paths += [m.group(0) for m in re.finditer(r"[a-z]:[\\/][^\s\"'|&;<>]*", quoted.sub(" ", raw), re.I)]
+    for path in paths:
+        if not _inside(path, roots):
+            bump("strict", f"用到工作資料夾以外的路徑：{path}", warn=True)
     if re.search(r"(^|[\\/\s\"'])\.\.([\\/]|$)", raw):
         bump("strict", "用到上一層資料夾（..），可能跑出工作資料夾", warn=True)
     if re.search(r"(^|\s)>{1,2}\s*\S|\bout-file\b|\bset-content\b|\badd-content\b|\bcopy\b|\bmove\b|\bxcopy\b|"

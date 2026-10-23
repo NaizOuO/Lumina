@@ -190,6 +190,8 @@ body.busy .acts{display:none}
 #micBtn.on{color:#fff;background:var(--accent, #3b82f6);animation:none}
 #micLevel{display:inline-flex;align-items:center;gap:2px;height:20px;margin-right:6px}
 #micLevel[hidden]{display:none}
+#autoTag{font-size:12px;color:#e5a00d;border:1px solid #e5a00d;border-radius:6px;padding:2px 7px;margin-left:4px}
+#autoTag[hidden]{display:none}
 #micLevel i{display:block;width:2px;height:2px;border-radius:1px;background:var(--muted);transition:height .08s}
 #ed .vint{color:var(--muted)}
 #ed .vint:empty::before{content:"…"}
@@ -502,6 +504,7 @@ body.resizing{cursor:col-resize;user-select:none}
         <button id="attach" title="附加檔案">📎 附件</button>
         <button id="mcpBtn" title="MCP 工具：讓模型使用其他程式的功能（Naiz Studio、REA…），可以自己加">🔌 工具</button>
         <input type="file" id="fileIn" multiple hidden>
+        <span id="autoTag" title="自動模式：執行指令、MCP 工具都不會再詢問（在 設定 → 一般 關閉）" hidden>自動模式</span>
         <span class="hint" id="hint"></span>
         <span id="micLevel" hidden aria-hidden="true"></span>
         <button id="micBtn" title="語音輸入" aria-label="語音輸入" hidden><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
@@ -565,6 +568,9 @@ body.resizing{cursor:col-resize;user-select:none}
       <div class="srow"><b>送出訊息</b><span class="sp"></span>
         <span class="seg" data-key="send_key"><button data-v="enter">Enter 送出</button><button data-v="ctrl_enter">Ctrl+Enter 送出</button></span></div>
       <p class="note">選「Ctrl+Enter 送出」時，Enter 是換行，打長篇推導或貼程式碼不會手滑送出。</p>
+      <div class="srow"><b>自動模式（不再詢問）</b><span class="sp"></span><input type="checkbox" data-key="auto_approve"></div>
+      <p class="note warn">開啟後，模型要執行指令、使用 MCP 工具時都直接執行，<b>不會再跳出確認</b>，包括有風險的操作（刪除檔案、安裝軟體、連網）。
+      只在你信任這次的工作時開啟。安全設定裡「一律禁止」的操作仍然會被擋。</p>
       <div class="srow"><b>需要確認時響提示音</b><span class="sp"></span><input type="checkbox" data-key="chime"></div>
       <p class="note">模型要執行指令、要下載元件等需要你按確認時，會響一聲；Lumina 在背景時分頁標題也會閃。</p>
       <div class="srow"><b>新對話的預設模型</b><span class="sp"></span><select data-key="default_model" id="defModel"></select></div>
@@ -2316,6 +2322,7 @@ const FONT = {small:"14px", normal:"15px", large:"17px"};
 const WIDTH = {narrow:"720px", normal:"860px", wide:"1120px", full:"none"};
 function applyPrefs(p){
   applyBackground(p);
+  $("#autoTag").hidden = !p.auto_approve;          // 自動模式開著時一直看得到，免得忘記
   document.documentElement.style.setProperty("--fs", FONT[p.font_size] || FONT.normal);
   document.documentElement.style.setProperty("--chatw", WIDTH[p.chat_width] || WIDTH.normal);
   document.body.classList.toggle("notimes", p.show_times === false);
