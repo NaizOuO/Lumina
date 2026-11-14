@@ -50,6 +50,9 @@ TOOLS = [
          "files": {"type": "array", "items": {"type": "string"}, "description": "本機檔案的完整路徑（影片、音訊、圖片、PDF、文字檔）"},
          "conversation_id": {"type": "string", "description": "接著之前的對話追問時填（lumina_result 會給）"},
          "model": {"type": "string", "description": "模型 ID，預設 gemini-3.8-flash-high；可用的模型見 lumina_models"},
+         "project": {"type": "string", "description":
+             "在 Lumina 的某個專案裡問（專案名稱或 id，見 lumina_projects）。Lumina 會帶上那個專案的指示、記憶和上傳的檔案，"
+             "對話也會存進那個專案。不能和 work_dir 同時用。"},
          "work_dir": {"type": "string", "description":
              "要讓 Lumina 能執行指令、存檔時填一個資料夾的完整路徑（Lumina Code 模式）。例如影片超過 100 MB 要先用 ffmpeg 切段、"
              "要抽影格、要把報告存到使用者指定的地方。不填就是只能讀的一般模式。"}},
@@ -70,6 +73,38 @@ TOOLS = [
                       "description": "allow 允許這一次；allow_all 這段工作裡同一個程式都允許；deny 拒絕"},
          "reason": {"type": "string", "description": "拒絕的原因（會告訴模型）"}},
          "required": ["job_id", "decision"]}},
+    {"name": "lumina_projects", "description":
+        "列出 Lumina 的專案（名稱、id、檔案數、有沒有專案記憶）。給 name 時改成回傳那個專案的詳細內容："
+        "專案指示、專案記憶（Lumina 從過去對話整理的重點）、上傳的檔案清單。"
+        "使用者提到某個主題（例如「Aivt」「量子力學」）時，先查有沒有對應的專案。",
+     "inputSchema": {"type": "object", "properties": {
+         "name": {"type": "string", "description": "專案名稱或 id（不填就列出全部）"}}}},
+    {"name": "lumina_conversations", "description":
+        "列出 Lumina 的對話（標題、conversation_id、最後更新時間），新的在前。可以指定專案、用關鍵字篩標題。"
+        "要找使用者之前在 Lumina 討論過什麼時用，再用 lumina_read 讀內容。",
+     "inputSchema": {"type": "object", "properties": {
+         "project": {"type": "string", "description": "專案名稱或 id；不填 = 一般對話（不屬於任何專案的）"},
+         "search": {"type": "string", "description": "標題裡要有的字（可省略）"},
+         "limit": {"type": "integer", "description": "最多幾筆，預設 20"}}}},
+    {"name": "lumina_read", "description":
+        "讀 Lumina 某段對話的內容（使用者說了什麼、Lumina 怎麼回）。預設只讀最後 6 則，長回答會截斷；"
+        "需要更多就調大 last 或 max_chars。要接著這段對話問下去，把 conversation_id 帶進 lumina_ask。",
+     "inputSchema": {"type": "object", "properties": {
+         "conversation_id": {"type": "string"},
+         "last": {"type": "integer", "description": "讀最後幾則，預設 6；0 = 全部"},
+         "max_chars": {"type": "integer", "description": "每則最多幾個字，預設 4000"}},
+         "required": ["conversation_id"]}},
+    {"name": "lumina_project_add_file", "description":
+        "把本機檔案加進 Lumina 專案的檔案區（之後在這個專案裡問，Lumina 都讀得到）。適合講義、論文、規格書這類會反覆用到的資料。",
+     "inputSchema": {"type": "object", "properties": {
+         "project": {"type": "string", "description": "專案名稱或 id"},
+         "files": {"type": "array", "items": {"type": "string"}, "description": "本機檔案的完整路徑"}},
+         "required": ["project", "files"]}},
+    {"name": "lumina_move", "description": "把 Lumina 的一段對話移到另一個專案（project 留空 = 移回一般對話）。使用者要求整理對話時才用。",
+     "inputSchema": {"type": "object", "properties": {
+         "conversation_id": {"type": "string"},
+         "project": {"type": "string", "description": "專案名稱或 id；空字串 = 一般對話"}},
+         "required": ["conversation_id", "project"]}},
     {"name": "lumina_models", "description": "列出 Lumina 現在可以用的模型 ID。",
      "inputSchema": {"type": "object", "properties": {}}},
 ]
@@ -161,6 +196,8 @@ def run_job(job):
     body = {"text": job["prompt"] + GUIDE, "files": job["staged"], "model": job["model"]}
     if job.get("ws"):
         body["code"] = job["ws"]
+    if job.get("project"):
+        body["project"] = job["project"]
     if job.get("conversation_id"):
         body["conversation_id"] = job["conversation_id"]
     reply, err = "", None
@@ -209,6 +246,9 @@ def t_ask(a):
         raise ToolError("Lumina 沒有開著（http://127.0.0.1:8765 連不到）。請使用者雙擊 Lumina 的「啟動.vbs」或桌面捷徑後再試。")
     files = [str(f) for f in (a.get("files") or []) if str(f).strip()]
     wd, ws = str(a.get("work_dir") or "").strip(), None
+    pr = find_project(a["project"]) if str(a.get("project") or "").strip() else None
+    if pr and wd:
+        raise ToolError("project 和 work_dir 只能選一個：專案是一般對話（帶專案資料），work_dir 是可以執行指令的 Code 模式。")
     if wd:
         if not Path(wd).is_dir():
             raise ToolError(f"找不到資料夾：{wd}（要用完整的本機路徑）")
@@ -218,13 +258,14 @@ def t_ask(a):
         ws = r["id"]
     inside = lambda f: wd and Path(f).resolve().is_relative_to(Path(wd).resolve())   # 工作資料夾裡的檔案直接讀
     job = {"id": uuid.uuid4().hex[:10], "prompt": prompt, "files": files, "ws": ws, "work_dir": wd or None,
+           "project": pr["id"] if pr else None,
            "staged": [f if inside(f) else stage(f) for f in files],
            "model": a.get("model") or DEFAULT_MODEL, "conversation_id": a.get("conversation_id"),
            "status": "running", "started": time.time(), "pid": os.getpid(), "tools": [], "answer": "", "error": None, "tokens": None}
     save(job)
     threading.Thread(target=run_job, args=(job,), daemon=True).start()
     return (f"已交給 Lumina，工作編號：{job['id']}（模型 {job['model']}，附件 {len(files)} 個，"
-            f"{'Code 模式，工作資料夾 ' + wd if wd else '一般模式（唯讀）'}）。"
+            f"{'Code 模式，工作資料夾 ' + wd if wd else ('專案「' + pr['name'] + '」' if pr else '一般模式（唯讀）')}）。"
             f"用 lumina_result 拿結果；長影片可能要好幾分鐘。")
 
 
@@ -262,6 +303,98 @@ def t_result(a):
         (f"\n\n（附註：Lumina 回報 {job['error'][:300]}）" if job.get("error") else "")
 
 
+def need_alive():
+    if not alive():
+        raise ToolError("Lumina 沒有開著（http://127.0.0.1:8765 連不到）。請使用者打開 Lumina 後再試。")
+
+
+def find_project(key):
+    need_alive()
+    key = str(key).strip()
+    items = get("/api/projects").get("items") or []
+    hit = [p for p in items if p["id"] == key or p["name"] == key] or \
+          [p for p in items if key.lower() in p["name"].lower()]
+    if len(hit) != 1:
+        names = "、".join(p["name"] for p in items) or "（沒有專案）"
+        raise ToolError(("找不到" if not hit else "符合的不只一個：") + f"專案「{key}」。現有專案：{names}")
+    return hit[0]
+
+
+def when(t):
+    return time.strftime("%Y-%m-%d %H:%M", time.localtime(t)) if t else "?"
+
+
+def t_projects(a):
+    need_alive()
+    if str(a.get("name") or "").strip():
+        pr = find_project(a["name"])
+        d = get("/api/projects/" + pr["id"])
+        files = "\n".join(f"- {f['name']}（{f['size_text']}）" for f in d.get("files") or []) or "（沒有檔案）"
+        return (f"# {d['name']}（id {d['id']}）\n\n## 專案指示\n{d.get('instructions') or '（沒有）'}\n\n"
+                f"## 專案記憶（Lumina 從過去對話整理的重點）\n{d.get('memory') or '（還沒有）'}\n\n## 檔案\n{files}")
+    items = get("/api/projects").get("items") or []
+    return "\n".join(f"- {p['name']}（id {p['id']}）：檔案 {p.get('file_count', 0)} 個"
+                     + ("，有專案記憶" if (p.get("memory") or "").strip() else "") for p in items) or "（沒有專案）"
+
+
+def t_conversations(a):
+    need_alive()
+    pid = find_project(a["project"])["id"] if str(a.get("project") or "").strip() else ""
+    items = get("/api/history?project=" + urllib.request.quote(pid)).get("items") or []
+    kw = str(a.get("search") or "").strip().lower()
+    if kw:
+        items = [x for x in items if kw in (x.get("title") or "").lower()]
+    items = items[:max(1, min(200, int(a.get("limit") or 20)))]
+    return "\n".join(f"- {x.get('title') or '（未命名）'}｜conversation_id {x['id']}｜{when(x.get('updated'))}"
+                     for x in items) or "（沒有符合的對話）"
+
+
+def t_read(a):
+    need_alive()
+    cid = str(a.get("conversation_id") or "")
+    try:
+        h = get("/api/history/" + urllib.request.quote(cid))
+    except urllib.error.HTTPError:
+        raise ToolError(f"找不到對話 {cid}。")
+    msgs = h.get("messages") or []
+    last, cap = int(a.get("last") if a.get("last") is not None else 6), max(200, int(a.get("max_chars") or 4000))
+    shown = msgs[-last:] if last > 0 else msgs
+    out = [f"# {h.get('title') or '（未命名）'}（共 {len(msgs)} 則，顯示最後 {len(shown)} 則）"]
+    for m in shown:
+        text = m.get("text") or ""
+        files = "、".join(Path(f).name for f in m.get("files") or [])
+        out.append(f"\n## {'使用者' if m['role'] == 'user' else 'Lumina'}（{when(m.get('t'))}）"
+                   + (f"\n附件：{files}" if files else "") + "\n"
+                   + (text[:cap] + f"\n…（後面還有 {len(text) - cap} 字）" if len(text) > cap else text))
+    return "\n".join(out)
+
+
+def t_add_file(a):
+    pr = find_project(a.get("project") or "")
+    dest_dir = ROOT / "data" / "projects" / pr["id"] / "files"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    added = []
+    for f in a.get("files") or []:
+        src = Path(str(f)).expanduser()
+        if not src.is_file():
+            raise ToolError(f"找不到檔案：{f}")
+        dest, n = dest_dir / src.name, 2
+        while dest.exists():
+            dest, n = dest_dir / f"{src.stem} ({n}){src.suffix}", n + 1
+        shutil.copy2(src, dest)
+        added.append(dest.name)
+    return f"已加進專案「{pr['name']}」：" + "、".join(added)
+
+
+def t_move(a):
+    need_alive()
+    pid = find_project(a["project"])["id"] if str(a.get("project") or "").strip() else ""
+    r = json.loads(post("/api/move", {"id": a.get("conversation_id"), "project": pid}).read())
+    if not r.get("ok"):
+        raise ToolError(r.get("message") or "移動失敗")
+    return "已移動。"
+
+
 def t_models(a):
     if not alive():
         raise ToolError("Lumina 沒有開著（http://127.0.0.1:8765 連不到）。")
@@ -289,7 +422,9 @@ def t_approve(a):
     return f"已回答：{dec}。用 lumina_result 繼續拿結果。"
 
 
-CALLS = {"lumina_ask": t_ask, "lumina_result": t_result, "lumina_approve": t_approve, "lumina_models": t_models}
+CALLS = {"lumina_ask": t_ask, "lumina_result": t_result, "lumina_approve": t_approve, "lumina_models": t_models,
+         "lumina_projects": t_projects, "lumina_conversations": t_conversations, "lumina_read": t_read,
+         "lumina_project_add_file": t_add_file, "lumina_move": t_move}
 OUT_LOCK = threading.Lock()
 
 
@@ -335,6 +470,8 @@ def main():
                                 "追問同一份內容時帶 conversation_id，不用重看。拿到結果後由你整理、判斷、回答使用者。"
                                 "Lumina 一個檔案最多讀 100 MB：影片太大時給 work_dir（Code 模式），讓它用 ffmpeg 切段或抽影格後再看；"
                                 "Code 模式需要授權時 lumina_result 會回報，先問使用者再用 lumina_approve 回答。"
+                                "使用者在 Lumina 有分專案（例如課程、研究主題）：lumina_projects 看有哪些、"
+                                "lumina_conversations／lumina_read 查過去在 Lumina 討論過什麼，lumina_ask 帶 project 就會用那個專案的資料和記憶。"
                                 "完整說明在 Lumina 資料夾的 README.md「給 AI 協作：Claude（桌面版對話）」一節。"}})
         elif method == "tools/list":
             send({"jsonrpc": "2.0", "id": mid, "result": {"tools": TOOLS}})

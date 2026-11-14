@@ -1431,6 +1431,40 @@ def quiet_agy_updater():
         pass
 
 
+def agy_version():
+    try:
+        out = subprocess.run([agy_exe(), "--version"], capture_output=True, text=True, encoding="utf-8",
+                             errors="replace", creationflags=NO_WINDOW, timeout=20).stdout.strip()
+        return (out.splitlines() or [""])[-1].strip()
+    except Exception:
+        return ""
+
+
+AGY_UPDATING = threading.Lock()
+
+
+def agy_update_now():
+    """手動更新 agy：回傳更新前後的版本，有新版就附上新版的更新說明。"""
+    if not AGY_UPDATING.acquire(blocking=False):
+        return {"ok": False, "message": "已經在更新了，稍等一下"}
+    try:
+        before = agy_version()
+        r = subprocess.run([agy_exe(), "update"], capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", creationflags=NO_WINDOW, timeout=600)
+        after = agy_version()
+        notes = ""
+        if after and after != before:
+            log = subprocess.run([agy_exe(), "changelog"], capture_output=True, text=True, encoding="utf-8",
+                                 errors="replace", creationflags=NO_WINDOW, timeout=30).stdout
+            notes = log.split(chr(10) + (before or "?") + ":")[0].strip()[:6000]
+            MODELS_CACHE.update(t=0, data=None)          # 新版可能有新模型
+        ok = r.returncode == 0 or after != before
+        return {"ok": ok, "before": before, "after": after, "updated": bool(after and after != before), "notes": notes,
+                "message": "" if ok else ((r.stderr or r.stdout).strip()[-400:] or "更新失敗")}
+    finally:
+        AGY_UPDATING.release()
+
+
 def agy_self_update():
     while True:
         try:
@@ -1513,7 +1547,7 @@ def replacement_model(mid, ids):
         return mid
     if not ids:
         return FALLBACK_MODEL if mid.startswith(RETIRED_MODELS) else mid
-    level = (re.search(r"-(low|medium|high)$", mid) or [None, "high"])[1]
+    level = (re.search(r"-(low|medium|xhigh|high|max)$", mid) or [None, "high"])[1]
     order = {"claude-opus": ["claude-opus", "claude-sonnet"],
              "claude-sonnet": ["claude-sonnet", "claude-opus"]}
     for prefix in next((v for k, v in order.items() if mid.startswith(k)), []) + ["gemini"]:
@@ -2314,6 +2348,8 @@ class Handler(BaseHTTPRequestHandler):
             if p.is_file() and inside(p, BG_DIR) and p.suffix.lower() in BG_EXTS:
                 return self.send_file(p)
             return self.send_json({"error": "not found"}, 404)
+        if u.path == "/api/agy_version":
+            return self.send_json({"version": agy_version()})
         if u.path == "/api/agy_storage":
             return self.send_json(agy_storage())
         if u.path == "/api/components":
@@ -2661,6 +2697,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({"ok": True, "text": suggest_next(d.get("q") or "", d.get("a") or "")})
             except RuntimeError as e:
                 return self.send_json({"ok": False, "message": str(e)})
+        if u.path == "/api/agy_update":
+            return self.send_json(agy_update_now())
         if u.path == "/api/agy_storage/clean":
             removed = clean_agy_storage()
             return self.send_json({"ok": True, "removed": removed, **agy_storage()})

@@ -155,6 +155,21 @@ Lumina 是使用者電腦上的 Gemini，用 Antigravity 的額度（跟你的�
 2. `lumina_result`：拿結果。還沒好會回報進度（每次最多等約 50 秒），再呼叫一次就好。長影片可能要好幾分鐘，等的時候可以先跟使用者說正在處理。
 3. 拿到結果後，由你整理、判斷、回答使用者。Lumina 的回答會附時間點，有疑問就用 `conversation_id` 追問，不要自己猜影片內容。
 
+### 專案：用使用者在 Lumina 累積的資料
+
+使用者在 Lumina 會依主題分專案（例如「量子力學導論」「Aivt」），每個專案有自己的指示、上傳的檔案，以及 Lumina 從過去對話整理的「專案記憶」。
+
+| 工具 | 用途 |
+|---|---|
+| `lumina_projects` | 列出專案；帶 `name` 看某個專案的指示、記憶、檔案清單 |
+| `lumina_conversations` | 列出某個專案（或一般對話）的對話，可用 `search` 篩標題 |
+| `lumina_read` | 讀某段對話的內容（預設最後 6 則） |
+| `lumina_ask` 帶 `project` | 在那個專案裡問，Lumina 會用專案的檔案和記憶，對話也存進專案 |
+| `lumina_project_add_file` | 把本機檔案加進專案的檔案區 |
+| `lumina_move` | 把對話移到別的專案（使用者要求整理時才用） |
+
+使用者提到某個主題、或說「我之前在 Lumina 討論過…」時，先用 `lumina_projects`、`lumina_conversations` 找，再用 `lumina_read` 讀，不要憑空猜。`project` 和 `work_dir` 不能同時用。
+
 ### 檔案超過 100 MB、要執行指令、要存檔：Code 模式
 
 Lumina（agy）**一個檔案最多讀 100 MB**，這是 Google 那邊的限制，調不了。很長的影片通常超過，這時 `lumina_ask` 帶 `work_dir`（一個資料夾的完整路徑，通常就是影片所在的資料夾）：

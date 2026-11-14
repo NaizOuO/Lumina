@@ -646,6 +646,8 @@ body.resizing{cursor:col-resize;user-select:none}
       <p class="note">把對話、專案（含上傳的檔案與記憶）和設定打包成一個 zip，存到 output 資料夾。換電腦時很方便。</p>
       <div class="srow"><b>匯入備份</b><span class="sp"></span><button id="importBtn">選擇備份檔</button><input type="file" id="importFile" accept=".zip" hidden></div>
       <p class="note">只會補上目前沒有的對話、專案和設定，已經存在的不會被覆蓋。</p>
+      <div class="srow"><b>Antigravity（agy）版本</b><span class="sp"></span><span id="agyVer" class="note">…</span><button id="agyUpdate">檢查更新</button></div>
+      <p class="note">新模型通常要更新 agy 才會出現。Lumina 每 6 小時也會在背景自動更新一次；按這裡可以馬上更新，更新完模型清單會重新整理。</p>
       <div class="srow"><b>agy 暫存</b><span class="sp"></span><button data-folder="agy">開啟</button><button id="agyClean">清理</button></div>
       <p class="note" id="agyStat">計算中…</p>
       <p class="note">agy 會為每段對話留一份暫存（讀過的 PDF 副本、生成的圖片等）。「清理」只會刪掉這個介面建立、而且對話已經不在的部分；你在終端機用 agy 的對話不會被動到。</p>
@@ -1616,18 +1618,21 @@ $("#send").onclick = send;
 })();
 
 /* ---------- models / settings ---------- */
-// agy 的模型 ID 已經內含思考強度（例如 gemini-3.8-flash-high），不能再另外加 --effort。
+// agy 的模型 ID 已經內含思考強度（例如 gemini-3.8-flash-high、gemini-4-hydrogen-xhigh），不能再另外加 --effort。
+// 清單是向使用者自己的 agy 抓的：沒更新 agy 的人只會看到舊版有的模型，不會選到用不了的。
 // 這裡把清單拆成「模型家族 + 該家族實際有的強度」，所以選不出無效組合。
-const EFFORT_NAMES = {low:"低 (low)", medium:"中 (medium)", high:"高 (high)"};
+const EFFORT_NAMES = {low:"低 (low)", medium:"中 (medium)", high:"高 (high)", xhigh:"很高 (xhigh)", max:"最高 (max)"};
+const EFFORT_ORDER = ["low", "medium", "high", "xhigh", "max"];
 let families = [];   // [{key, name, variants:[{id, level}]}]
 function groupModels(models){
   const map = new Map();
   for (const m of models){
-    const mm = m.id.match(/^(.*)-(low|medium|high)$/);
+    const mm = m.id.match(/^(.*)-(low|medium|xhigh|high|max)$/);
     const key = mm ? mm[1] : m.id, level = mm ? mm[2] : "";
-    if (!map.has(key)) map.set(key, {key, name:m.name.replace(/\s*\((Low|Medium|High)\)\s*$/, ""), group:m.group || "Antigravity", variants:[]});
+    if (!map.has(key)) map.set(key, {key, name:m.name.replace(/\s*\((Low|Medium|XHigh|High|Max)\)\s*$/i, ""), group:m.group || "Antigravity", variants:[]});
     map.get(key).variants.push({id:m.id, level});
   }
+  for (const f of map.values()) f.variants.sort((a, b) => EFFORT_ORDER.indexOf(a.level) - EFFORT_ORDER.indexOf(b.level));
   return [...map.values()];
 }
 const currentModel = () => $("#effort").value || "";
@@ -1636,7 +1641,7 @@ function fillEffort(fam, wantId){
   const sel = $("#effort"); sel.innerHTML = "";
   for (const v of fam.variants){
     const o = document.createElement("option"); o.value = v.id;
-    o.textContent = v.level ? EFFORT_NAMES[v.level] : "（此模型不可調）"; sel.appendChild(o);
+    o.textContent = v.level ? (EFFORT_NAMES[v.level] || v.level) : "（此模型不可調）"; sel.appendChild(o);
   }
   sel.disabled = fam.variants.length < 2;
   if (fam.variants.some(v => v.id === wantId)) sel.value = wantId;
@@ -1687,7 +1692,20 @@ paintSearch();
 
 /* ---------- usage ---------- */
 let usage = null;
-const groupOf = id => /^gemini/i.test(id || "") ? 0 : 1;   // agy /usage：Gemini 一組，Claude/GPT 一組
+// agy /usage 會列出每個用量池「包含哪些模型」，照這個對應（Google 新增或調整池子時不用改程式）。
+// Orchestrator 會自己分派：規劃階段用 Argon、寫碼階段用 Hydrogen，所以兩個池子都會扣。本地模型不計額度。
+function poolsOf(id){
+  if (!usage || !id || id.startsWith("local:")) return [];
+  const fam = (modelLabel(id).split(" · ")[0] || "").toLowerCase();
+  const has = (g, name) => g.name.toLowerCase() === name || (g.description || "").toLowerCase().includes(name);
+  const find = name => usage.groups.findIndex(g => has(g, name));
+  let out;
+  if (/orchestrator/i.test(id)) out = [find("argon"), find("hydrogen")];
+  else out = [find(fam)];
+  out = out.filter(i => i >= 0);
+  if (!out.length) out = [usage.groups.findIndex(g => /gemini/i.test(id) === /gemini/i.test(g.name))];   // 對不上時的舊分法
+  return [...new Set(out.filter(i => i >= 0))];
+}
 const pct = f => Math.round((f ?? 0) * 100);
 // 存下來的舊數值：重置時間已經過了，那一格就當作已經恢復
 const leftOf = b => b.reset_time && new Date(b.reset_time) < Date.now() ? 1 : (b.remaining_fraction ?? 1);
@@ -1710,8 +1728,14 @@ function countdown(iso){
 function paintUsage(){
   const chip = $("#usageChip");
   if (!usage){ chip.innerHTML = `<span class="ulabel">用量</span>`; return; }
-  const g = usage.groups[groupOf(currentModel())] || usage.groups[0];
-  const rows = [["5h", g.buckets.find(x => x.window === "5h")], ["7d", g.buckets.find(x => x.window === "weekly")]];
+  const pools = poolsOf(currentModel());
+  if (!pools.length){ chip.innerHTML = `<span class="ulabel">${currentModel().startsWith("local:") ? "本地 · 不計額度" : "用量"}</span>`; chip.title = ""; return; }
+  const rows = [];
+  for (const gi of pools){
+    const g = usage.groups[gi], tag = pools.length > 1 ? (/argon/i.test(g.name) ? "A·" : "G·") : "";
+    for (const [label, w] of [["5h", "5h"], ["7d", "weekly"]]){ const b = g.buckets.find(x => x.window === w); if (b) rows.push([tag + label, b]); }
+  }
+  const g = {name: pools.map(i => usage.groups[i].name).join(" ＋ ")};
   chip.innerHTML = rows.filter(([, b]) => b).map(([label, b]) => {
     const used = Math.min(100, Math.max(0, Math.round((1 - leftOf(b)) * 100)));
     const filled = used > 0 ? Math.max(1, Math.round(used / 10)) : 0, hot = used >= 85 ? " hot" : "";
@@ -1726,12 +1750,12 @@ setInterval(() => { if (!running) refreshUsage(); }, 5 * 60 * 1000);   // 用量
 function paintUsageDialog(){
   const body = $("#ubody");
   if (!usage){ body.textContent = "讀取失敗，請按重新整理。"; return; }
-  const cur = groupOf(currentModel());
+  const cur = poolsOf(currentModel());
   body.innerHTML = "";
   usage.groups.forEach((g, gi) => {
     const d = document.createElement("div"); d.className = "ugroup";
     d.innerHTML = `<h4></h4><div class="d"></div>`;
-    d.querySelector("h4").textContent = g.name + (gi === cur ? "（目前模型）" : "");
+    d.querySelector("h4").textContent = g.name + (cur.includes(gi) ? "（目前模型）" : "");
     d.querySelector(".d").textContent = g.description || "";
     for (const b of g.buckets){
       const p = pct(leftOf(b));
@@ -2273,7 +2297,24 @@ function paintAgyStat(s){
   $("#agyStat").textContent = !s.exists ? "找不到 agy 的暫存資料夾" :
     `這個介面：使用中 ${s.in_use.count} 段（${s.in_use.size}）、可清理 ${s.cleanable.count} 段（${s.cleanable.size}）；其他（終端機等）${s.others.count} 段（${s.others.size}），不會動到`;
 }
-async function loadAgyStat(){ try { paintAgyStat(await (await fetch("/api/agy_storage")).json()); } catch {} }
+async function loadAgyVer(){ try { $("#agyVer").textContent = "v" + ((await (await fetch("/api/agy_version")).json()).version || "?"); } catch {} }
+$("#agyUpdate").onclick = async () => {
+  const b = $("#agyUpdate"); b.disabled = true; b.textContent = "更新中…";
+  try {
+    const r = await post("/api/agy_update", {});
+    if (!r.ok) toast("⚠ agy 更新失敗：" + (r.message || ""));
+    else if (!r.updated) toast(`agy 已經是最新版（v${r.after}）`);
+    else {
+      toast(`✅ agy 已從 v${r.before} 更新到 v${r.after}`);
+      await loadModels(true);
+      if (r.notes) alert(`agy v${r.after} 更新內容（英文原文）：
+
+` + r.notes.slice(0, 3000));
+    }
+    if (r.after) $("#agyVer").textContent = "v" + r.after;
+  } finally { b.disabled = false; b.textContent = "檢查更新"; }
+};
+async function loadAgyStat(){ loadAgyVer(); try { paintAgyStat(await (await fetch("/api/agy_storage")).json()); } catch {} }
 $("#agyClean").onclick = async () => {
   if (!confirm("清理這個介面建立、但對話已經不在的 agy 暫存？\n（使用中的對話與你在終端機的 agy 對話都不會動到）")) return;
   const r = await post("/api/agy_storage/clean", {}); paintAgyStat(r);
@@ -2858,8 +2899,7 @@ function checkQuota(reset){
   if (reset) warned.clear();
   const th = +(savedPrefs.quota_warn ?? 15);
   if (!usage || !th) return;
-  const g = usage.groups[groupOf(currentModel())]; if (!g) return;
-  for (const b of g.buckets){
+  for (const g of poolsOf(currentModel()).map(i => usage.groups[i])) for (const b of g.buckets){
     const left = Math.round(leftOf(b) * 100), key = g.name + b.window;
     if (left < th && !warned.has(key)){
       warned.add(key);
