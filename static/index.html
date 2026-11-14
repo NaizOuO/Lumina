@@ -192,6 +192,10 @@ body.busy .acts{display:none}
 #micLevel[hidden]{display:none}
 #autoTag{font-size:12px;color:#e5a00d;border:1px solid #e5a00d;border-radius:6px;padding:2px 7px;margin-left:4px}
 #autoTag[hidden]{display:none}
+.movemenu{margin:2px 6px 6px;padding:6px;border:1px solid var(--border);border-radius:8px;background:var(--panel, rgba(30,30,30,.95))}
+.movemenu .mmtitle{font-size:12px;color:var(--muted);margin:0 4px 4px}
+.movemenu button{display:block;width:100%;text-align:left;background:none;border:0;padding:6px 8px;border-radius:6px;color:inherit;cursor:pointer}
+.movemenu button:hover{background:rgba(127,127,127,.18)}
 #micLevel i{display:block;width:2px;height:2px;border-radius:1px;background:var(--muted);transition:height .08s}
 #ed .vint{color:var(--muted)}
 #ed .vint:empty::before{content:"…"}
@@ -1776,6 +1780,31 @@ function listItem(label, active, buttons){
   return d;
 }
 
+// 對話的「移到專案」：在那一列下面跳出專案清單，點一下就移過去
+function moveConvMenu(row, it){
+  document.querySelectorAll(".movemenu").forEach(m => m.remove());
+  const m = document.createElement("div"); m.className = "movemenu";
+  const dests = [{id:"", name:"一般對話"}, ...projects].filter(p => p.id !== (project || ""));
+  m.innerHTML = `<div class="mmtitle">移到…</div>`;
+  for (const p of dests){
+    const b = document.createElement("button"); b.textContent = (p.id ? "📁 " : "💬 ") + p.name;
+    b.onclick = async ev => {
+      ev.stopPropagation(); m.remove();
+      const r = await post("/api/move", {id:it.id, project:p.id});
+      if (!r.ok){ toast(r.message || "移動失敗"); return; }
+      toast(`已移到「${p.name}」`);
+      if (it.id === convId) newConv(); else loadHistory();
+      loadProjects();
+    };
+    m.appendChild(b);
+  }
+  if (!dests.length) m.innerHTML += `<div class="meta">沒有其他專案</div>`;
+  row.after(m);
+  setTimeout(() => document.addEventListener("click", function off(e){
+    if (!m.contains(e.target)){ m.remove(); document.removeEventListener("click", off); }
+  }), 0);
+}
+
 /* ---------- 專案 ---------- */
 let project = store.get("project", "");   // 目前所在專案 id；"" = 一般對話
 let projects = [];
@@ -2099,6 +2128,7 @@ async function loadHistory(){
   for (const it of j.items){
     const d = listItem(it.title || "（未命名）", it.id === convId, [
       ["✎", "改名", () => inlineRename(d, it.title || "", v => post("/api/rename", {id:it.id, title:v}))],
+      ["⇄", "移到專案", () => moveConvMenu(d, it)],
       ["🗑", "刪除", async () => {
         if (!confirm("刪除這筆對話紀錄？")) return;
         await post("/api/delete", {id:it.id});

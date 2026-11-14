@@ -2571,6 +2571,22 @@ class Handler(BaseHTTPRequestHandler):
                 h["title"], h["renamed"] = title[:80], True     # 手動改過名稱：自動標題不再覆蓋
                 write_hist(h)
             return self.send_json({"ok": True})
+        if u.path == "/api/move":                 # 把對話移到另一個專案（"" = 一般對話）
+            d = self.body()
+            cid, pid = str(d.get("id") or ""), str(d.get("project") or "")
+            if cid in ACTIVE:
+                return self.send_json({"ok": False, "message": "這段對話正在回答中，等它結束再移動。"})
+            if pid and not load_project(pid):
+                return self.send_json({"ok": False, "message": "找不到這個專案"})
+            with HIST_LOCK:
+                h = load_hist(cid)
+                if not h or h.get("code"):
+                    return self.send_json({"ok": False, "message": "找不到這段對話（Code 區的對話不能移到專案）"})
+                remove_transcript(h)                  # 舊專案資料夾裡的 Markdown 副本一起拿掉
+                h["project"] = pid or None
+                write_hist(h)
+                write_transcript(h)
+            return self.send_json({"ok": True})
         if u.path.startswith("/api/project/"):
             return self.project_action(u.path.rsplit("/", 1)[1], self.body())
         if u.path == "/api/chat":
