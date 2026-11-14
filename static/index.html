@@ -2130,8 +2130,9 @@ async function loadHistory(){
       ["✎", "改名", () => inlineRename(d, it.title || "", v => post("/api/rename", {id:it.id, title:v}))],
       ["⇄", "移到專案", () => moveConvMenu(d, it)],
       ["🗑", "刪除", async () => {
-        if (!confirm("刪除這筆對話紀錄？")) return;
-        await post("/api/delete", {id:it.id});
+        if (!confirm("刪除這筆對話紀錄？\n\n只有這段對話用到的附件（圖片、PDF）會一起從電腦刪除；AI 產生到 output 資料夾的檔案會保留。")) return;
+        const r = await post("/api/delete", {id:it.id});
+        if (r.freed) toast(`已刪除，附件一起清掉 ${fmtMB(r.freed)}`);
         if (it.id === convId) newConv(); else loadHistory();
       }],
     ]);

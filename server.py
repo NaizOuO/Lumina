@@ -122,6 +122,35 @@ def brain_dir(cid):
     return p if cid and p != AGY_BRAIN else None
 
 
+def drop_attachments(h):
+    """刪掉對話之後：它附加過、放在 uploads 裡、而且沒有其他對話用到的檔案一起刪。回傳刪掉的位元組數。"""
+    mine = {str(Path(f).resolve()).lower(): Path(f) for m in h.get("messages", []) for f in (m.get("files") or [])
+            if command_guard._inside(str(f), [UPLOADS.resolve()])}
+    if not mine:
+        return 0
+    for other in HISTORY.glob("*.json"):           # 別的對話（例如分支出去的、重新回答的）也用到就保留
+        try:
+            o = json.loads(other.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        for m in o.get("messages", []):
+            for f in (m.get("files") or []):
+                mine.pop(str(Path(f).resolve()).lower(), None)
+        if not mine:
+            return 0
+    freed = 0
+    for f in mine.values():
+        try:
+            if f.is_file():
+                freed += f.stat().st_size
+                f.unlink()
+                if f.parent != UPLOADS and not any(f.parent.iterdir()):    # 當天的資料夾空了就一起拿掉
+                    f.parent.rmdir()
+        except OSError:
+            pass
+    return freed
+
+
 def drop_brain(cid):
     """刪掉這個介面建立的某段對話在 brain 裡的資料夾（不是自己建立的不動）。"""
     p = brain_dir(cid)
@@ -2555,12 +2584,14 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(s)
         if u.path == "/api/delete":
             cid = self.body().get("id", "")
-            remove_transcript(load_hist(cid))
+            h = load_hist(cid)
+            remove_transcript(h)
             drop_brain(cid)                           # agy 為這段對話留的暫存（讀過的 PDF 副本等）一起清掉
             p = hist_path(cid)
             if p.exists():
                 p.unlink()
-            return self.send_json({"ok": True})
+            freed = drop_attachments(h) if h else 0   # 只有這段對話用到的附件一起刪掉
+            return self.send_json({"ok": True, "freed": freed})
         if u.path == "/api/rename":
             d = self.body()
             title = (d.get("title") or "").strip()
